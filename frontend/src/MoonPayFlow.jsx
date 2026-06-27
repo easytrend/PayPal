@@ -79,7 +79,16 @@ export default function MoonPayFlow() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ walletAddress, email: email || undefined }),
       });
-      const data = await res.json();
+      
+      const contentType = res.headers.get("content-type");
+      let data;
+      if (contentType && contentType.includes("application/json")) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error(text || `Server returned error ${res.status}`);
+      }
+
       if (!res.ok) throw new Error(data.error || "Backend error");
       setCheckoutUrl(data.checkoutUrl);
       setStep(STEP.PAYMENT);
@@ -102,7 +111,16 @@ export default function MoonPayFlow() {
     setError(null);
     try {
       const res = await fetch(`${BACKEND}/moonpay-status?walletAddress=${walletAddress}`);
-      const data = await res.json();
+      
+      const contentType = res.headers.get("content-type");
+      let data;
+      if (contentType && contentType.includes("application/json")) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error(text || `Server returned error ${res.status}`);
+      }
+
       if (!res.ok) throw new Error(data.error || "Status error");
       setTxStatus(data.status);
       setTxDetail(data);
@@ -137,10 +155,10 @@ export default function MoonPayFlow() {
 
   // ── Render ─────────────────────────────────────────────────────────────
   return (
-    <div style={styles.page}>
+    <div className="flow-page">
       {/* Header */}
       <header style={styles.header}>
-        <div style={styles.headerInner}>
+        <div className="flow-header-inner">
           <div style={styles.logo}>
             <MoonIcon />
             <span>MoonPay</span>
@@ -160,10 +178,10 @@ export default function MoonPayFlow() {
       </header>
 
       {/* Progress */}
-      <div style={styles.progressWrap}>
+      <div className="progress-wrap">
         {STEP_LABELS.map((label, i) => (
           <React.Fragment key={i}>
-            <div style={styles.progressItem}>
+            <div className="progress-item">
               <div style={{
                 ...styles.progressDot,
                 background: i < step ? "var(--accent)" : i === step ? "var(--accent)" : "var(--border)",
@@ -171,21 +189,20 @@ export default function MoonPayFlow() {
               }}>
                 {i < step ? "✓" : i + 1}
               </div>
-              <span style={{
-                ...styles.progressLabel,
+              <span className="progress-label" style={{
                 color: i === step ? "var(--text)" : i < step ? "var(--accent)" : "var(--muted)",
               }}>{label}</span>
             </div>
             {i < STEP_LABELS.length - 1 && (
-              <div style={{ ...styles.progressLine, background: i < step ? "var(--accent)" : "var(--border)" }} />
+              <div className="progress-line" style={{ background: i < step ? "var(--accent)" : "var(--border)" }} />
             )}
           </React.Fragment>
         ))}
       </div>
 
       {/* Main Card */}
-      <main style={styles.main}>
-        <div style={styles.card}>
+      <main className="flow-main">
+        <div className="flow-card">
           {/* STEP 0: Connect */}
           {step === STEP.CONNECT && (
             <StepPanel
@@ -321,7 +338,7 @@ export default function MoonPayFlow() {
         </div>
 
         {/* Webhook panel */}
-        <div style={styles.sidePanel}>
+        <div className="flow-side-panel">
           <h3 style={styles.sidePanelTitle}>Webhook Listener</h3>
           <p style={styles.sidePanelDesc}>
             Your backend at <code style={styles.code}>/moonpay-webhook</code> is listening for real-time callbacks from MoonPay.
@@ -451,24 +468,18 @@ function PayPalIcon({ size = 20 }) {
 
 // ── Styles ─────────────────────────────────────────────────────────────────
 const styles = {
-  page: { display: "flex", flexDirection: "column", minHeight: "100vh" },
   header: { borderBottom: "1px solid var(--border)", padding: "14px 24px" },
-  headerInner: { maxWidth: 1100, margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center" },
   logo: { display: "flex", alignItems: "center", gap: 10, fontWeight: 700, fontSize: 18 },
   logoDivider: { color: "var(--muted)", fontWeight: 300 },
   headerRight: { display: "flex", alignItems: "center", gap: 12 },
   networkBadge: { fontSize: 12, padding: "3px 10px", borderRadius: 20, background: "rgba(0,255,163,0.1)", color: "var(--accent)", fontFamily: "var(--font-mono)", fontWeight: 600 },
   disconnectBtn: { fontSize: 12, padding: "5px 12px", borderRadius: "var(--radius)", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--muted)", cursor: "pointer", fontFamily: "var(--font-mono)" },
 
-  progressWrap: { display: "flex", alignItems: "center", justifyContent: "center", gap: 0, padding: "24px 24px 0", maxWidth: 800, margin: "0 auto", width: "100%" },
   progressItem: { display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 80 },
   progressDot: { width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#000", transition: "all 0.3s" },
   progressLabel: { fontSize: 11, fontWeight: 500, textAlign: "center", transition: "color 0.3s", whiteSpace: "nowrap" },
   progressLine: { flex: 1, height: 1, margin: "0 4px", marginBottom: 22, transition: "background 0.3s" },
 
-  main: { flex: 1, display: "flex", gap: 24, padding: "24px", maxWidth: 1100, margin: "0 auto", width: "100%", alignItems: "flex-start" },
-  card: { flex: 1, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 32 },
-  sidePanel: { width: 260, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", padding: 20, flexShrink: 0 },
   sidePanelTitle: { fontSize: 13, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "var(--muted)", marginBottom: 10 },
   sidePanelDesc: { fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16 },
   code: { fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--accent)" },
