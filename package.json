@@ -1,0 +1,11 @@
+{
+  "name": "moonpay-paypal-sandbox",
+  "version": "1.0.0",
+  "description": "MoonPay × PayPal sandbox integration with Phantom/Solana Devnet",
+  "scripts": {
+    "backend": "cd backend && node server.js",
+    "frontend": "cd frontend && npm run dev",
+    "install:all": "cd backend && npm install && cd ../frontend && npm install"
+  },
+  "private": true
+}
