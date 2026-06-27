@@ -8,6 +8,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Strip /api prefix if present (e.g. when hosted on Vercel)
+app.use((req, res, next) => {
+  if (req.url.startsWith("/api")) {
+    req.url = req.url.replace(/^\/api/, "");
+  }
+  next();
+});
+
 // Raw body for webhook signature verification
 app.use("/moonpay-webhook", express.raw({ type: "application/json" }));
 
@@ -193,8 +201,12 @@ app.post("/moonpay-webhook", (req, res) => {
 // ─── Health ───────────────────────────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({ ok: true, env: "sandbox" }));
 
-app.listen(PORT, () => {
-  console.log(`MoonPay sandbox backend running on http://localhost:${PORT}`);
-  console.log(`  Public key configured: ${!!MOONPAY_PUBLIC_KEY}`);
-  console.log(`  Secret key configured: ${!!MOONPAY_SECRET_KEY}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`MoonPay sandbox backend running on http://localhost:${PORT}`);
+    console.log(`  Public key configured: ${!!MOONPAY_PUBLIC_KEY}`);
+    console.log(`  Secret key configured: ${!!MOONPAY_SECRET_KEY}`);
+  });
+}
+
+module.exports = app;
