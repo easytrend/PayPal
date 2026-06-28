@@ -13,6 +13,7 @@
     "@solana/wallet-adapter-react": "*",
     "@solana/wallet-adapter-react-ui": "*",
     "@solana/web3.js": "*",
+    "@solana/spl-token": "*",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },

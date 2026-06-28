@@ -64,7 +64,7 @@ function verifyWebhookSignature(rawBody, signatureHeader) {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-app.post("/moonpay-checkout", (req, res) => {
+app.post(["/moonpay-checkout", "/generate-paypal-link"], (req, res) => {
   const { walletAddress, email } = req.body;
 
   if (!walletAddress) {
@@ -139,12 +139,14 @@ app.get("/moonpay-status", async (req, res) => {
     const transactions = response.data;
 
     if (!transactions || transactions.length === 0) {
-      return res.json({ status: "no_transactions", transactions: [] });
+      return res.json({ confirmed: false, status: "no_transactions", transactions: [] });
     }
 
     // Return the most recent transaction's status
     const latest = transactions[0];
+    const confirmed = latest.status === "completed";
     return res.json({
+      confirmed,
       status: latest.status,
       transactionId: latest.id,
       cryptoAmount: latest.cryptoTransactionId ? latest.quoteCurrencyAmount : null,
