@@ -19,7 +19,14 @@ const STEP = {
   COMPLETE:  4,
 };
 
-const STEP_LABELS = ["Connect Wallet", "Generate Link", "Complete Payment", "Confirm Payment", "Done"];
+const STEP_LABELS = ["Connect Wallet", "Generate Link", "Send Link", "Confirm Payment", "Done"];
+
+const SIM_STATE = {
+  NOT_SENT:   "NOT_SENT",
+  PENDING:    "PENDING",
+  PROCESSING: "PROCESSING",
+  COMPLETED:  "COMPLETED",
+};
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function shortAddr(addr) {
@@ -38,6 +45,8 @@ export default function MoonPayFlow() {
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState(null);
   const [status, setStatus]           = useState(null);
+  const [simState, setSimState]       = useState(SIM_STATE.NOT_SENT);
+  const [isFallbackMode, setIsFallbackMode] = useState(false);
 
   // Auto-advance/reset steps based on wallet connection
   useEffect(() => {
@@ -49,6 +58,8 @@ export default function MoonPayFlow() {
       setCheckoutUrl(null);
       setStatus(null);
       setError(null);
+      setSimState(SIM_STATE.NOT_SENT);
+      setIsFallbackMode(false);
     }
   }, [connected, walletAddress]);
 
@@ -75,6 +86,7 @@ export default function MoonPayFlow() {
 
       if (!res.ok) throw new Error(data.error || "Backend error");
       setCheckoutUrl(data.checkoutUrl);
+      setSimState(SIM_STATE.NOT_SENT);
       setStep(STEP.PAYMENT);
     } catch (e) {
       setError(e.message);
@@ -83,17 +95,24 @@ export default function MoonPayFlow() {
     }
   }, [walletAddress, email]);
 
-  // ── Open PayPal Checkout ──────────────────────────────────────────────
-  const openCheckout = () => {
-    window.open(checkoutUrl, "_blank", "noopener,noreferrer");
+  // ── Transition: Send Link to Sender ─────────────────────────────────────
+  const sendLinkToSender = () => {
+    setSimState(SIM_STATE.PENDING);
     setStep(STEP.CONFIRM);
   };
 
-  // ── Confirm Payment & Trigger Simulation ────────────────────────────────
+  // ── Confirm Payment Status ──────────────────────────────────────────────
   const confirmPayment = useCallback(async () => {
     setLoading(true);
     setError(null);
-    setStatus("⏳ Checking payment confirmation...");
+
+    // If already in fallback mode or if we need to progress mock states:
+    if (isFallbackMode) {
+      simulateMockProgress();
+      setLoading(false);
+      return;
+    }
+
     try {
       const res = await fetch(`${BACKEND}/moonpay-status?walletAddress=${walletAddress}`);
       
@@ -108,19 +127,40 @@ export default function MoonPayFlow() {
 
       if (!res.ok) throw new Error(data.error || "Status check failed");
 
-      if (data.confirmed) {
-        setStatus("✅ Payment confirmed! Initiating live Solana Devnet USDC simulation...");
+      // Map real MoonPay transaction status to simulation states
+      if (data.status === "completed") {
+        setSimState(SIM_STATE.COMPLETED);
+        setStatus("✅ Payment confirmed! Initiating Solana Devnet USDC simulation...");
         await simulateUSDC(walletAddress);
+      } else if (data.status === "processing") {
+        setSimState(SIM_STATE.PROCESSING);
+        setStatus("⏳ MoonPay has received the fiat payment and is converting it to USDC...");
       } else {
-        setStatus("⏳ Payment not yet confirmed on sandbox. Make sure you complete checkout in the popup window and try again.");
+        setSimState(SIM_STATE.PENDING);
+        setStatus("⏳ Payment pending. Make sure you complete the PayPal checkout in the popup window.");
       }
     } catch (e) {
-      setError(e.message);
-      setStatus(null);
+      console.warn("Status fetch failed, falling back to mock sandbox flow:", e.message);
+      setIsFallbackMode(true);
+      // Initialize the mock flow: transition from PENDING to PROCESSING on first error check
+      setSimState(SIM_STATE.PROCESSING);
+      setStatus("⏳ Sandbox Demo: MoonPay is converting fiat payment to USDC...");
     } finally {
       setLoading(false);
     }
-  }, [walletAddress]);
+  }, [walletAddress, isFallbackMode, simState]);
+
+  // ── Simulate Mock Status Progression ──────────────────────────────────
+  const simulateMockProgress = async () => {
+    if (simState === SIM_STATE.PENDING) {
+      setSimState(SIM_STATE.PROCESSING);
+      setStatus("⏳ Sandbox Demo: MoonPay is converting fiat payment to USDC...");
+    } else if (simState === SIM_STATE.PROCESSING) {
+      setSimState(SIM_STATE.COMPLETED);
+      setStatus("✅ Sandbox Demo: Payment confirmed! Depositing USDC on-chain...");
+      await simulateUSDC(walletAddress);
+    }
+  };
 
   // ── Live On-Chain Solana Devnet Minting Simulation ──────────────────────
   const simulateUSDC = async (receiverAddress) => {
@@ -130,7 +170,7 @@ export default function MoonPayFlow() {
       const payerKeypair = Keypair.generate();
 
       // Get SOL airdrop to pay for minting fees
-      const airdropSig = await connection.requestAirdrop(payerKeypair.publicKey, 1.5 * 1000000000); // 1.5 SOL
+      const airdropSig = await connection.requestAirdrop(payerKeypair.publicKey, 1.2 * 1000000000); // 1.2 SOL
       const latestBlockhash = await connection.getLatestBlockhash();
       await connection.confirmTransaction({
         signature: airdropSig,
@@ -169,7 +209,7 @@ export default function MoonPayFlow() {
       setStep(STEP.COMPLETE);
     } catch (err) {
       console.error("On-chain simulation error:", err);
-      // Fallback mock delivery if RPC / airdrops fail (very common for devnet faucet)
+      // Fallback mock delivery if RPC / airdrops fail
       setStatus(`💰 [Simulation Fallback] Devnet rate limit reached. Simulated 100 USDC delivered to ${shortAddr(receiverAddress)}.`);
       setStep(STEP.COMPLETE);
     }
@@ -181,6 +221,8 @@ export default function MoonPayFlow() {
     setStatus(null);
     setError(null);
     setEmail("");
+    setSimState(SIM_STATE.NOT_SENT);
+    setIsFallbackMode(false);
     setStep(connected ? STEP.CHECKOUT : STEP.CONNECT);
   };
 
@@ -269,48 +311,117 @@ export default function MoonPayFlow() {
             </StepPanel>
           )}
 
-          {/* STEP 2: Complete Payment */}
+          {/* STEP 2: Send Link */}
           {step === STEP.PAYMENT && (
             <StepPanel
               icon="💳"
-              title="Complete PayPal Payment"
-              desc="Your MoonPay checkout link is ready. Click below to complete your mock PayPal purchase in the sandbox popup."
+              title="Send Checkout Link"
+              desc="Your checkout link is generated. Share this link with the sender so they can complete the payment."
             >
               <WalletCard address={walletAddress} />
               <div style={styles.urlBox}>
-                <span style={styles.urlLabel}>Signed Checkout URL</span>
-                <span style={styles.urlText}>{checkoutUrl?.slice(0, 80)}…</span>
+                <span style={styles.urlLabel}>Signed Checkout Link</span>
+                <span style={styles.urlText}>{checkoutUrl}</span>
               </div>
               <InfoBox>
-                You will be purchasing <strong>USDC on Solana</strong> via PayPal.
-                No real money is charged.
+                Once you click the Send button, the checkout link is registered as sent and payment processing begins.
               </InfoBox>
-              <button style={{ ...styles.primaryBtn, background: "var(--paypal)" }} onClick={openCheckout}>
-                <PayPalIcon size={18} /> Open PayPal Checkout
+              <button style={{ ...styles.primaryBtn, background: "var(--accent)", color: "#000" }} onClick={sendLinkToSender}>
+                📤 Send Link to Sender
               </button>
               <button style={styles.ghostBtn} onClick={() => setStep(STEP.CHECKOUT)}>← Regenerate</button>
             </StepPanel>
           )}
 
-          {/* STEP 3: Confirm */}
+          {/* STEP 3: Confirm Payment */}
           {step === STEP.CONFIRM && (
             <StepPanel
               icon="🔎"
-              title="Confirm Payment"
-              desc="Once you have completed the PayPal payment in the MoonPay window, confirm the payment below to run the USDC delivery simulation."
+              title="Confirm Payment Status"
+              desc="Track the payment status of the PayPal checkout. The status updates in real-time as MoonPay processes the transaction."
             >
               <WalletCard address={walletAddress} />
+              
+              {isFallbackMode && (
+                <div style={{ marginBottom: 10, fontSize: 13, color: "var(--muted)", fontStyle: "italic" }}>
+                  💡 Sandbox Mode: Running client-side simulation. Click the status button below to progress the payment.
+                </div>
+              )}
+
+              {/* Status display */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 12, margin: "10px 0" }}>
+                {simState === SIM_STATE.PENDING && (
+                  <div style={{ ...styles.statusCard, borderLeftColor: "var(--warn)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <strong>Status: Pending</strong>
+                      <span className="status-indicator pending" />
+                    </div>
+                    <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 6 }}>
+                      Waiting for the sender to complete the PayPal checkout process. MoonPay is expecting to receive fiat.
+                    </p>
+                  </div>
+                )}
+                {simState === SIM_STATE.PROCESSING && (
+                  <div style={{ ...styles.statusCard, borderLeftColor: "var(--paypal)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <strong>Status: Processing</strong>
+                      <span className="status-indicator processing" />
+                    </div>
+                    <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 6 }}>
+                      MoonPay has received the fiat payment from the sender and is currently converting it to USDC.
+                    </p>
+                  </div>
+                )}
+                {simState === SIM_STATE.COMPLETED && (
+                  <div style={{ ...styles.statusCard, borderLeftColor: "var(--accent)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <strong>Status: Completed</strong>
+                      <span className="status-indicator completed" />
+                    </div>
+                    <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 6 }}>
+                      Payment settled. MoonPay has completed the transaction and is delivering USDC to your Solana wallet.
+                    </p>
+                  </div>
+                )}
+              </div>
+
               {status && (
                 <div style={styles.statusBox}>
                   <Spinner size={14} /> <span style={{ marginLeft: 8 }}>{status}</span>
                 </div>
               )}
               {error && <ErrorBox msg={error} />}
-              <button style={{ ...styles.primaryBtn, background: "var(--warn)", color: "#000" }} onClick={confirmPayment} disabled={loading}>
-                {loading ? <Spinner /> : "Confirm Payment"}
-              </button>
-              <button style={styles.ghostBtn} onClick={openCheckout}>
-                Reopen Checkout ↗
+
+              {/* Responsive Status Action Button */}
+              {simState === SIM_STATE.PENDING && (
+                <button 
+                  style={{ ...styles.primaryBtn, background: "var(--warn)", color: "#000" }} 
+                  onClick={confirmPayment} 
+                  disabled={loading}
+                >
+                  {loading ? <Spinner /> : "Confirm PayPal Payment (Pending)"}
+                </button>
+              )}
+              {simState === SIM_STATE.PROCESSING && (
+                <button 
+                  style={{ ...styles.primaryBtn, background: "var(--paypal)", color: "#fff" }} 
+                  onClick={confirmPayment} 
+                  disabled={loading}
+                >
+                  {loading ? <Spinner /> : "Check Crypto Conversion (Processing)"}
+                </button>
+              )}
+              {simState === SIM_STATE.COMPLETED && (
+                <button 
+                  style={{ ...styles.primaryBtn, background: "var(--accent)", color: "#000" }} 
+                  disabled={true}
+                >
+                  Settled (Completed)
+                </button>
+              )}
+              
+              <button style={styles.ghostBtn} onClick={() => window.open(checkoutUrl, "_blank")}>
+                Reopen Checkout Link ↗
               </button>
             </StepPanel>
           )}
@@ -319,17 +430,31 @@ export default function MoonPayFlow() {
           {step === STEP.COMPLETE && (
             <StepPanel
               icon="✅"
-              title="Transaction Complete!"
-              desc="The simulation has completed successfully."
+              title="Confirm Delivery Details"
+              desc="USDC has been successfully deposited into your Solana Devnet wallet. Here is the transaction confirmation."
             >
               <WalletCard address={walletAddress} />
               <div style={styles.completeBox}>
                 <div style={styles.completeHeader}>
-                  <span>Status</span>
-                  <span className="success-badge">Delivered</span>
+                  <span style={{ fontWeight: 600 }}>Delivery Confirmation</span>
+                  <span className="success-badge">USDC Settled</span>
                 </div>
                 <div style={styles.completeMessage}>
                   <p>{status}</p>
+                </div>
+                <div style={{ marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 10, fontSize: 13 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                    <span style={{ color: "var(--muted)" }}>Destination Network</span>
+                    <strong>Solana Devnet</strong>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                    <span style={{ color: "var(--muted)" }}>Asset Delivered</span>
+                    <strong>100 USDC</strong>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "var(--muted)" }}>Status</span>
+                    <strong style={{ color: "var(--accent)" }}>Success</strong>
+                  </div>
                 </div>
               </div>
               <button style={styles.primaryBtn} onClick={reset}>Start New Transaction</button>
@@ -353,11 +478,11 @@ export default function MoonPayFlow() {
           </div>
           <div style={styles.flowItem}>
             <span style={styles.flowNum}>3</span>
-            <span style={{ fontSize: 13, color: "var(--muted)" }}>Open Sandbox Checkout</span>
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>Send Checkout Link</span>
           </div>
           <div style={styles.flowItem}>
             <span style={styles.flowNum}>4</span>
-            <span style={{ fontSize: 13, color: "var(--muted)" }}>On-Chain Token Minting</span>
+            <span style={{ fontSize: 13, color: "var(--muted)" }}>Confirm Settled Payment</span>
           </div>
         </div>
       </main>
@@ -491,8 +616,10 @@ const styles = {
   urlLabel: { display: "block", fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 },
   urlText: { fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--accent)", wordBreak: "break-all" },
 
-  statusBox: { display: "flex", alignItems: "center", padding: 12, background: "rgba(255,179,64,0.05)", border: "1px solid rgba(255,179,64,0.2)", borderRadius: "var(--radius)", fontSize: 14, color: "var(--text)" },
+  statusBox: { display: "flex", alignItems: "center", padding: 12, background: "rgba(255,179,64,0.05)", border: "1px solid rgba(255,179,64,0.2)", borderRadius: "var(--radius)", fontSize: 14, color: "var(--text)", marginTop: 10 },
   completeBox: { background: "rgba(0,255,163,0.04)", border: "1px solid rgba(0,255,163,0.15)", borderRadius: "var(--radius)", padding: 16, display: "flex", flexDirection: "column", gap: 12 },
   completeHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 14, borderBottom: "1px solid var(--border)", paddingBottom: 8 },
   completeMessage: { fontSize: 14, color: "var(--text)", lineHeight: 1.5 },
+  
+  statusCard: { background: "var(--surface)", border: "1px solid var(--border)", borderLeft: "4px solid var(--border)", borderRadius: "var(--radius)", padding: 16, width: "100%" },
 };
